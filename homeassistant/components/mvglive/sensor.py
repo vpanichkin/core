@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 
-import MVGLive
+from mvg import MvgApi, TransportType
 import voluptuous as vol
 
 from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
@@ -21,27 +21,25 @@ CONF_NEXT_DEPARTURE = "nextdeparture"
 
 CONF_STATION = "station"
 CONF_DESTINATIONS = "destinations"
-CONF_DIRECTIONS = "directions"
 CONF_LINES = "lines"
 CONF_PRODUCTS = "products"
 CONF_TIMEOFFSET = "timeoffset"
 CONF_NUMBER = "number"
 
-DEFAULT_PRODUCT = ["U-Bahn", "Tram", "Bus", "ExpressBus", "S-Bahn", "Nachteule"]
-
 ICONS = {
+    "Bahn": "mdi:train",
+    "S-Bahn": "mdi:train-variant",
     "U-Bahn": "mdi:subway",
     "Tram": "mdi:tram",
     "Bus": "mdi:bus",
-    "ExpressBus": "mdi:bus",
-    "S-Bahn": "mdi:train",
-    "Nachteule": "mdi:owl",
-    "SEV": "mdi:checkbox-blank-circle-outline",
+    "Regionalbus": "mdi:bus-school",
+    "SEV": "mdi:bus",
+    "Schiff": "mdi:ferry",
     "-": "mdi:clock",
 }
-ATTRIBUTION = "Data provided by MVG-live.de"
+ATTRIBUTION = "Data provided by mvg.de"
 
-SCAN_INTERVAL = timedelta(seconds=30)
+SCAN_INTERVAL = timedelta(seconds=45)
 
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
@@ -49,10 +47,9 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
             {
                 vol.Required(CONF_STATION): cv.string,
                 vol.Optional(CONF_DESTINATIONS, default=[""]): cv.ensure_list_csv,
-                vol.Optional(CONF_DIRECTIONS, default=[""]): cv.ensure_list_csv,
                 vol.Optional(CONF_LINES, default=[""]): cv.ensure_list_csv,
                 vol.Optional(
-                    CONF_PRODUCTS, default=DEFAULT_PRODUCT
+                    CONF_PRODUCTS, default=None
                 ): cv.ensure_list_csv,
                 vol.Optional(CONF_TIMEOFFSET, default=0): cv.positive_int,
                 vol.Optional(CONF_NUMBER, default=1): cv.positive_int,
@@ -76,7 +73,6 @@ def setup_platform(
             MVGLiveSensor(
                 nextdeparture.get(CONF_STATION),
                 nextdeparture.get(CONF_DESTINATIONS),
-                nextdeparture.get(CONF_DIRECTIONS),
                 nextdeparture.get(CONF_LINES),
                 nextdeparture.get(CONF_PRODUCTS),
                 nextdeparture.get(CONF_TIMEOFFSET),
@@ -96,7 +92,6 @@ class MVGLiveSensor(SensorEntity):
         self,
         station,
         destinations,
-        directions,
         lines,
         products,
         timeoffset,
@@ -107,7 +102,7 @@ class MVGLiveSensor(SensorEntity):
         self._station = station
         self._name = name
         self.data = MVGLiveData(
-            station, destinations, directions, lines, products, timeoffset, number
+            station, destinations, lines, products, timeoffset, number
         )
         self._state = None
         self._icon = ICONS["-"]
@@ -117,7 +112,7 @@ class MVGLiveSensor(SensorEntity):
         """Return the name of the sensor."""
         if self._name:
             return self._name
-        return self._station
+        return "MVG station sensor:" + self._station
 
     @property
     def native_value(self):
@@ -150,41 +145,57 @@ class MVGLiveSensor(SensorEntity):
             self._state = "-"
             self._icon = ICONS["-"]
         else:
-            self._state = self.data.departures[0].get("time", "-")
-            self._icon = ICONS[self.data.departures[0].get("product", "-")]
+            self._state = self.data.departures[0].get("time_in_mins", "-")
+            self._icon = ICONS[self.data.departures[0].get("type", "-")]
+
+
+def _get_minutes_until_departure(departure_time: int) -> int:
+    """
+    Calculates the time difference in minutes between the current time and a given departure time.
+
+    Args:
+        departure_time: Unix timestamp of the departure time, in seconds.
+
+    Returns:
+        The time difference in minutes, as a float.
+    """
+    current_time = datetime.now()
+    departure_datetime = datetime.fromtimestamp(departure_time)
+    time_difference = (departure_datetime - current_time).total_seconds()
+    minutes_difference = int(time_difference / 60.0)
+    return minutes_difference
 
 
 class MVGLiveData:
     """Pull data from the mvg-live.de web page."""
 
     def __init__(
-        self, station, destinations, directions, lines, products, timeoffset, number
+        self, station, destinations, lines, products, timeoffset, number
     ):
         """Initialize the sensor."""
-        self._station = station
+        self._station_name = station
         self._destinations = destinations
-        self._directions = directions
         self._lines = lines
         self._products = products
         self._timeoffset = timeoffset
         self._number = number
-        self._include_ubahn = "U-Bahn" in self._products
-        self._include_tram = "Tram" in self._products
-        self._include_bus = "Bus" in self._products
-        self._include_sbahn = "S-Bahn" in self._products
-        self.mvg = MVGLive.MVGLive()
+        self._station = MvgApi.station(self._station_name)
+        if self._station:
+            self.mvg = MvgApi(self._station['id'])
         self.departures = []
 
     def update(self):
         """Update the connection data."""
+        if not self._station or not self.mvg:
+            self.departures = []
+            _LOGGER.warning("Station cannot be found by name: change name or use station id, e.g. de:99232:2353")
+            return
         try:
-            _departures = self.mvg.getlivedata(
-                station=self._station,
-                timeoffset=self._timeoffset,
-                ubahn=self._include_ubahn,
-                tram=self._include_tram,
-                bus=self._include_bus,
-                sbahn=self._include_sbahn,
+            _departures = self.mvg.departures(
+                offset=self._timeoffset,
+                limit=self._number,
+                transport_types=[transport_type for transport_type in TransportType
+                                 if transport_type.value[0] in self._products] if self._products else None
             )
         except ValueError:
             self.departures = []
@@ -199,23 +210,17 @@ class MVGLiveData:
             ):
                 continue
 
-            if (
-                "" not in self._directions[:1]
-                and _departure["direction"] not in self._directions
-            ):
+            if "" not in self._lines[:1] and _departure["line"] not in self._lines:
                 continue
 
-            if "" not in self._lines[:1] and _departure["linename"] not in self._lines:
-                continue
+            time_to_departure = _get_minutes_until_departure(_departure["time"])
 
-            if _departure["time"] < self._timeoffset:
+            if time_to_departure < self._timeoffset:
                 continue
 
             # now select the relevant data
             _nextdep = {}
-            for k in ("destination", "linename", "time", "direction", "product"):
+            for k in ("destination", "line", "type", "cancelled"):
                 _nextdep[k] = _departure.get(k, "")
-            _nextdep["time"] = int(_nextdep["time"])
+            _nextdep["time_in_mins"] = str(time_to_departure)
             self.departures.append(_nextdep)
-            if i == self._number - 1:
-                break

@@ -20,7 +20,7 @@ Mastodon.py==1.5.1
 PyFlick==0.0.2
 
 # homeassistant.components.mvglive
-PyMVGLive==1.1.4
+mvg==1.0.2
 
 # homeassistant.components.keymitt_ble
 PyMicroBot==0.0.9
