@@ -27,7 +27,7 @@ CONF_TIMEOFFSET = "timeoffset"
 CONF_NUMBER = "number"
 
 ICONS = {
-    "Bahn": "mdi:train",
+    "Bahn": "mdi:train-car-passenger",
     "S-Bahn": "mdi:train-variant",
     "U-Bahn": "mdi:subway",
     "Tram": "mdi:tram",
@@ -52,7 +52,7 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
                     CONF_PRODUCTS, default=None
                 ): cv.ensure_list_csv,
                 vol.Optional(CONF_TIMEOFFSET, default=0): cv.positive_int,
-                vol.Optional(CONF_NUMBER, default=1): cv.positive_int,
+                vol.Optional(CONF_NUMBER, default=5): cv.positive_int,
                 vol.Optional(CONF_NAME): cv.string,
             }
         ]
@@ -61,10 +61,10 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
 
 
 def setup_platform(
-    hass: HomeAssistant,
-    config: ConfigType,
-    add_entities: AddEntitiesCallback,
-    discovery_info: DiscoveryInfoType | None = None,
+        hass: HomeAssistant,
+        config: ConfigType,
+        add_entities: AddEntitiesCallback,
+        discovery_info: DiscoveryInfoType | None = None,
 ) -> None:
     """Set up the MVGLive sensor."""
     sensors = []
@@ -222,5 +222,5 @@ class MVGLiveData:
             _nextdep = {}
             for k in ("destination", "line", "type", "cancelled"):
                 _nextdep[k] = _departure.get(k, "")
-            _nextdep["time_in_mins"] = str(time_to_departure)
+            _nextdep["time_in_mins"] = time_to_departure
             self.departures.append(_nextdep)
